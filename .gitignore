@@ -1,0 +1,11 @@
+*.log
+.DS_Store
+*.gz
+/__pycache__
+/venv
+*.jpg
+*.json
+*.log*
+*.png
+*.csv
+nohup*
