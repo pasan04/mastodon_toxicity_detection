@@ -1,15 +1,21 @@
 import os
+import sys
 import re
 import gzip
 import time
 import logging
 from urllib.parse import urlparse
 from googleapiclient import discovery
+from googleapiclient.errors import HttpError
 import json
 
 # Processed data dir
-processed_data_dir = ""
-GOOGLE_API_KEY = ""
+processed_data_dir = "/Users/pkamburu/mastodon_toxicity_detection/processed_data"
+
+# Processed mstdn files
+processed_mstdn_files = "/Users/pkamburu/mastodon_toxicity_detection/helper/processed_file_collection.txt"
+
+GOOGLE_API_KEY = "AIzaSyBhlKZXCam9Wyhncupn-1fsgJO5TWS9S1A"
 
 class MastodonProcessor:
     def __init__(self):
@@ -17,9 +23,9 @@ class MastodonProcessor:
         Initialize Mastodon processor with data.
         """
         self.debug_mode = True
-        self.log_directory = "log"
+        self.log_directory = "helper"
 
-        # Ensure the log directory exists
+        # Ensure the helper directory exists
         if not os.path.exists(self.log_directory):
             os.makedirs(self.log_directory)
 
@@ -33,34 +39,50 @@ class MastodonProcessor:
         logger = logging.getLogger(__name__)
         logger.setLevel(logging.DEBUG)
 
-        # Correct log file path
+        # Correct helper file path
         log_file = os.path.join(self.log_directory, "mstdn_analysis.log")
 
-        # Create a file handler
-        fh = logging.FileHandler(log_file)
-        fh.setLevel(logging.DEBUG if self.debug_mode else logging.INFO)
-
-        # Set formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh.setFormatter(formatter)
-
-        # Avoid adding duplicate handlers
+        # Check if handlers already exist to avoid duplicates
         if not logger.handlers:
+            # Create a file handler
+            fh = logging.FileHandler(log_file)
+            fh.setLevel(logging.DEBUG if self.debug_mode else logging.INFO)
+
+            # Set formatter
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            fh.setFormatter(formatter)
             logger.addHandler(fh)
+
+            # Add a stream handler for stdout
+            ch = logging.StreamHandler(sys.stdout)
+            ch.setFormatter(formatter)
+            ch.setLevel(logging.INFO)
+            logger.addHandler(ch)
 
         return logger
 
     def process_files(self, all_gz_files: list):
         """
-        Process gzipped files.
+        Process gzipped files, skipping already processed ones.
 
         Parameters:
         all_gz_files (list): List of gzipped files to process.
+        processed_mstdn_files (str): File path to track processed files.
         """
         # Set up the logger
         logger = self.set_logger()
 
+        # Read the processed files list (if it exists)
+        processed_files = set()
+        if os.path.exists(processed_mstdn_files):
+            with open(processed_mstdn_files, 'r') as file:
+                processed_files = set(line.strip() for line in file)
+
         for gz_file in all_gz_files:
+            if gz_file in processed_files:
+                logger.info(f"Skipping already processed file: {gz_file}")
+                continue
+
             try:
                 logger.info(f"Start processing file: {gz_file}")
                 start_time = time.time()
@@ -71,6 +93,11 @@ class MastodonProcessor:
                 end_time = time.time()
                 file_processing_time = end_time - start_time
                 logger.info(f"Finished processing file: {gz_file}, Time taken: {file_processing_time:.2f} seconds.")
+
+                # After processing, mark the file as processed by appending it to the processed file
+                with open(processed_mstdn_files, 'a') as file:
+                    file.write(gz_file + '\n')
+
             except Exception as e:
                 logger.error(f"Error in processing the file - {gz_file}: {e}")
 
@@ -83,39 +110,55 @@ class MastodonProcessor:
         """
         logger = self.set_logger()
 
-        with gzip.open(gz_file, 'rt') as f:
-            for line in f:
-                line = line.rstrip()
-                if not line:
-                    continue
+        with gzip.open(gz_file, 'rt', encoding='utf-8') as file:
+            for line in file:
                 try:
-                    # Convert the line into json
                     json_obj = json.loads(line)
-                    post_url = json_obj['account']['url']
 
-                    selected_mstdn_instances = self.get_top_20_mstdn_instances()
+                    post_content = json_obj.get('content', '')
+                    post_id = json_obj.get('id')
+                    if not post_content.strip():
+                        logger.warning(f"Skipping empty comment in post id: {post_id}")
+                        continue
 
-                    if post_url:
-                        domain, username = self.parse_domain_and_username(post_url, None)
+                    # Analyze toxicity
+                    toxicity_response = self.get_toxicity_score(post_content)
+                    if not toxicity_response:
+                        logger.warning(f"Skipping post id {post_id} due to API error.")
+                        continue
 
-                        if domain in selected_mstdn_instances:
-                            author_file_name = self.parse_domain_and_username(post_url, "author_file")
-                            file_path = os.path.join(processed_data_dir, f"{author_file_name}.json.gz")
-                            post_content = json_obj['content']
+                    error_type = toxicity_response.get("errorType")
+                    if error_type == "LANGUAGE_NOT_SUPPORTED_BY_ATTRIBUTE":
+                        detected_languages = toxicity_response.get(
+                            "languageNotSupportedByAttributeError", {}
+                        ).get("detectedLanguages", [])
+                        logger.warning(f"Skipping unsupported language(s) {detected_languages} for post id: {post_id}")
+                        continue
 
-                            toxicity_response = self.get_toxicity_score(post_content)
-                            json_obj['toxicity_response'] = toxicity_response  # Add the entire response to the JSON object
+                    json_obj['toxicity_response'] = toxicity_response
 
-                            # Convert the updated JSON object to a string
-                            line = json.dumps(json_obj)
+                    # Generate author file name and path
+                    post_url = json_obj.get('account', {}).get('url')
+                    if not post_url:
+                        logger.warning(f"Skipping post id {post_id} due to missing account URL.")
+                        continue
 
-                            # Open the gzipped file in append mode and write the updated line
-                            with gzip.open(file_path, 'at') as out_f:  # Open file in text append mode ('at')
-                                out_f.write(line + '\n')
+                    author_file_name = self.parse_domain_and_username(post_url, "author_file")
+                    file_path = os.path.join(processed_data_dir, f"{author_file_name}.json.gz")
 
-                except json.JSONDecodeError as e:
-                    logger.error(f"Error decoding JSON: {e}")
-                    continue
+                    # Convert the updated JSON object to a string
+                    updated_line = json.dumps(json_obj)
+
+                    # Open the gzipped file in append mode and write the updated line
+                    with gzip.open(file_path, 'at') as out_f:  # Open file in text append mode ('at')
+                        out_f.write(updated_line + '\n')
+
+                except KeyError as ke:
+                    logger.error(f"Missing key in JSON object: {ke}")
+                except json.JSONDecodeError as je:
+                    logger.error(f"Invalid JSON format: {je}")
+                except Exception as e:
+                    logger.error(f"Error processing line: {e}")
 
     def get_top_20_mstdn_instances(self) -> list:
         """
@@ -144,7 +187,8 @@ class MastodonProcessor:
                 "piaille.fr",
                 "aethy.com",
                 "planet.moe",
-                "techhub.social"
+                "techhub.social",
+                "mastodon.uno"
         ]
         return top_20_mstdn_instances
 
@@ -185,10 +229,11 @@ class MastodonProcessor:
             return None
 
     def get_toxicity_score(self, post_content):
-        # Set up the logger
+        """
+        Get toxicity score for the provided content using Perspective API.
+        """
         logger = self.set_logger()
 
-        # Refer here - https://developers.perspectiveapi.com/s/docs-sample-requests?language=en_US
         try:
             client = discovery.build(
                 "commentanalyzer",
@@ -204,7 +249,14 @@ class MastodonProcessor:
             }
 
             response = client.comments().analyze(body=analyze_request).execute()
+            time.sleep(1)  # Ensure at least 1-second delay between requests
             return response
+        except HttpError as http_err:
+            if "LANGUAGE_NOT_SUPPORTED_BY_ATTRIBUTE" in str(http_err):
+                # Extract language information from the error details
+                error_details = json.loads(http_err.content.decode())
+                return error_details
+            logger.error(f"HTTP error during toxicity analysis: {http_err}")
         except Exception as e:
-            logger.error(f"Error parsing URL: {e}")
-            return None
+            logger.error(f"Error parsing post comment: {e}")
+        return None

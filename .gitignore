@@ -5,7 +5,7 @@
 /venv
 /data
 /processed_data
-/log
+/helper
 .idea/
 lib/__pycache__/
 *.jpg

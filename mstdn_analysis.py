@@ -2,7 +2,7 @@ import glob
 import os
 from lib.processor import MastodonProcessor
 
-gz_file_dir = ''
+gz_file_dir = '/Users/pkamburu/mastodon_toxicity_detection/data'
 
 # Get all the gz files.         
 def list_gz_files(directory):
