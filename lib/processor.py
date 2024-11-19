@@ -8,8 +8,8 @@ from googleapiclient import discovery
 import json
 
 # Processed data dir
-processed_data_dir = "/Users/pkamburu/mastodon_toxicity_detection/processed_data"
-GOOGLE_API_KEY = "AIzaSyBhlKZXCam9Wyhncupn-1fsgJO5TWS9S1A"
+processed_data_dir = ""
+GOOGLE_API_KEY = ""
 
 class MastodonProcessor:
     def __init__(self):
