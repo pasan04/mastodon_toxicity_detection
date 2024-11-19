@@ -3,6 +3,11 @@
 *.gz
 /__pycache__
 /venv
+/data
+/processed_data
+/log
+.idea/
+lib/__pycache__/
 *.jpg
 *.json
 *.log*
