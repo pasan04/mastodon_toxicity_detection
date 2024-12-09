@@ -5,15 +5,16 @@ import gzip
 import time
 import logging
 from urllib.parse import urlparse
+from langdetect import detect
 from googleapiclient import discovery
 from googleapiclient.errors import HttpError
 import json
 
 # Processed data dir
-processed_data_dir = "/Users/pkamburu/mastodon_toxicity_detection/processed_data"
+processed_data_dir = "/media/processed_data"
 
 # Processed mstdn files
-processed_mstdn_files = "/Users/pkamburu/mastodon_toxicity_detection/helper/processed_file_collection.txt"
+processed_mstdn_files = "/media/mastodon_toxicity_detection/helper/processed_file_collection.txt"
 
 GOOGLE_API_KEY = "AIzaSyBhlKZXCam9Wyhncupn-1fsgJO5TWS9S1A"
 
@@ -117,41 +118,50 @@ class MastodonProcessor:
 
                     post_content = json_obj.get('content', '')
                     post_id = json_obj.get('id')
-                    if not post_content.strip():
-                        logger.warning(f"Skipping empty comment in post id: {post_id}")
-                        continue
+                    event_type = json_obj.get('event_type')
 
-                    # Analyze toxicity
-                    toxicity_response = self.get_toxicity_score(post_content)
-                    if not toxicity_response:
-                        logger.warning(f"Skipping post id {post_id} due to API error.")
-                        continue
+                    if event_type == 'update': # Check if the event type is update.
+                        if not post_content.strip():
+                            logger.warning(f"Skipping empty comment in post id: {post_id}")
+                            continue
 
-                    error_type = toxicity_response.get("errorType")
-                    if error_type == "LANGUAGE_NOT_SUPPORTED_BY_ATTRIBUTE":
-                        detected_languages = toxicity_response.get(
-                            "languageNotSupportedByAttributeError", {}
-                        ).get("detectedLanguages", [])
-                        logger.warning(f"Skipping unsupported language(s) {detected_languages} for post id: {post_id}")
-                        continue
+                        # Generate author file name and path
+                        post_url = json_obj.get('account', {}).get('url')
+                        if not post_url:
+                            logger.warning(f"Skipping post id {post_id} due to missing account URL.")
+                            continue
 
-                    json_obj['toxicity_response'] = toxicity_response
+                        # Selected mstdn instances
+                        selected_mstdn_instances = self.get_top_10_mstdn_instances()
+                        domain, username = self.parse_domain_and_username(post_url, None)
 
-                    # Generate author file name and path
-                    post_url = json_obj.get('account', {}).get('url')
-                    if not post_url:
-                        logger.warning(f"Skipping post id {post_id} due to missing account URL.")
-                        continue
+                        if domain in selected_mstdn_instances and self.is_sentence_english(post_content):
 
-                    author_file_name = self.parse_domain_and_username(post_url, "author_file")
-                    file_path = os.path.join(processed_data_dir, f"{author_file_name}.json.gz")
+                            # Analyze toxicity
+                            toxicity_response = self.get_toxicity_score(post_content)
+                            if not toxicity_response:
+                                logger.warning(f"Skipping post id {post_id} due to API error.")
+                                continue
 
-                    # Convert the updated JSON object to a string
-                    updated_line = json.dumps(json_obj)
+                            error_type = toxicity_response.get("errorType")
+                            if error_type == "LANGUAGE_NOT_SUPPORTED_BY_ATTRIBUTE":
+                                detected_languages = toxicity_response.get(
+                                    "languageNotSupportedByAttributeError", {}
+                                ).get("detectedLanguages", [])
+                                logger.warning(f"Skipping unsupported language(s) {detected_languages} for post id: {post_id}")
+                                continue
 
-                    # Open the gzipped file in append mode and write the updated line
-                    with gzip.open(file_path, 'at') as out_f:  # Open file in text append mode ('at')
-                        out_f.write(updated_line + '\n')
+                            json_obj['toxicity_response'] = toxicity_response
+
+                            author_file_name = self.parse_domain_and_username(post_url, "author_file")
+                            file_path = os.path.join(processed_data_dir, f"{author_file_name}.json.gz")
+
+                            # Convert the updated JSON object to a string
+                            updated_line = json.dumps(json_obj)
+
+                            # Open the gzipped file in append mode and write the updated line
+                            with gzip.open(file_path, 'at') as out_f:  # Open file in text append mode ('at')
+                                out_f.write(updated_line + '\n')
 
                 except KeyError as ke:
                     logger.error(f"Missing key in JSON object: {ke}")
@@ -160,7 +170,7 @@ class MastodonProcessor:
                 except Exception as e:
                     logger.error(f"Error processing line: {e}")
 
-    def get_top_20_mstdn_instances(self) -> list:
+    def get_top_10_mstdn_instances(self) -> list:
         """
         Get the top 20 Mastodon instances by active users.
         url - https://instances.social/api/doc/
@@ -168,32 +178,22 @@ class MastodonProcessor:
         Returns:
         list: A list of the top 20 Mastodon instances by active users
         """
-        top_20_mstdn_instances = [
-                "mastodon.social",
-                "pawoo.net",
-                "mstdn.jp",
-                "mstdn.social",
-                "infosec.exchange",
-                "mastodon.online",
-                "mas.to",
-                "fosstodon.org",
-                "fedibird.com",
-                "hachyderm.io",
-                "mastodon.world",
-                "m.cmx.im",
-                "chaos.social",
-                "troet.cafe",
-                "mastodon.gamedev.place",
-                "piaille.fr",
-                "aethy.com",
-                "planet.moe",
-                "techhub.social",
-                "mastodon.uno"
+        top_10_mstdn_instances = [
+            "mastodon.social",
+            "mstdn.social",
+            "infosec.exchange",
+            "mastodon.online",
+            "mas.to",
+            "techhub.social",
+            "aethy.com",
+            "hachyderm.io",
+            "mastodon.world",
+            "chaos.social"
         ]
-        return top_20_mstdn_instances
+        return top_10_mstdn_instances
 
 
-    def parse_domain_and_username(self, user_identifier, type):
+    def parse_domain_and_username(self, user_identifier, data_type):
         """
         Extract the domain and username from a URL
         and return it as a string in the format `username@domain`
@@ -211,7 +211,7 @@ class MastodonProcessor:
 
         try:
             parsed_url = urlparse(user_identifier)
-            if type == 'author_file':
+            if data_type == 'author_file':
                 clean_user_identifier = re.sub(r'/$', '', user_identifier)
                 parsed_url = urlparse(clean_user_identifier)
                 domain = parsed_url.hostname
@@ -230,33 +230,45 @@ class MastodonProcessor:
 
     def get_toxicity_score(self, post_content):
         """
-        Get toxicity score for the provided content using Perspective API.
+        Get toxicity score with retry on rate limit errors.
         """
         logger = self.set_logger()
+        retries = 3  # Number of retries
 
-        try:
-            client = discovery.build(
-                "commentanalyzer",
-                "v1alpha1",
-                developerKey=GOOGLE_API_KEY,
-                discoveryServiceUrl="https://commentanalyzer.googleapis.com/$discovery/rest?version=v1alpha1",
-                static_discovery=False,
-            )
-
-            analyze_request = {
-                'comment': {'text': post_content},
-                'requestedAttributes': {'TOXICITY': {}}
-            }
-
-            response = client.comments().analyze(body=analyze_request).execute()
-            time.sleep(1)  # Ensure at least 1-second delay between requests
-            return response
-        except HttpError as http_err:
-            if "LANGUAGE_NOT_SUPPORTED_BY_ATTRIBUTE" in str(http_err):
-                # Extract language information from the error details
-                error_details = json.loads(http_err.content.decode())
-                return error_details
-            logger.error(f"HTTP error during toxicity analysis: {http_err}")
-        except Exception as e:
-            logger.error(f"Error parsing post comment: {e}")
+        for attempt in range(retries):
+            try:
+                client = discovery.build(
+                    "commentanalyzer",
+                    "v1alpha1",
+                    developerKey=GOOGLE_API_KEY,
+                    discoveryServiceUrl="https://commentanalyzer.googleapis.com/$discovery/rest?version=v1alpha1",
+                    static_discovery=False,
+                )
+                analyze_request = {
+                    'comment': {'text': post_content},
+                    'requestedAttributes': {'TOXICITY': {}}
+                }
+                response = client.comments().analyze(body=analyze_request).execute()
+                
+                time.sleep(1.1)  # Delay between requests
+                return response
+            except HttpError as http_err:
+                if "RATE_LIMIT_EXCEEDED" in str(http_err):
+                    wait_time = (attempt + 1) * 10  # Exponential backoff
+                    logger.warning(f"Rate limit exceeded. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"HTTP error during toxicity analysis: {http_err}")
+                    break
+            except Exception as e:
+                logger.error(f"Error parsing post comment: {e}")
+                break
         return None
+
+    def is_sentence_english(self, sentence):
+        try:
+            language = detect(sentence)
+            return language == 'en'
+        except Exception as e:
+            logger.error(f"Error in identifying the language: {e}")
+            return False
