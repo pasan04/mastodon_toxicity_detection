@@ -11,7 +11,7 @@ from googleapiclient.errors import HttpError
 import json
 
 # Processed data dir
-processed_data_dir = "/media/processed_data"
+processed_data_dir = "/media/mastodon_toxicity_detection/processed_data"
 
 # Processed mstdn files
 processed_mstdn_files = "/media/mastodon_toxicity_detection/helper/processed_file_collection.txt"

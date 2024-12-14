@@ -1,7 +1,7 @@
 import os
 from lib.processor import MastodonProcessor
 
-gz_file_dir = '/media/mstdn_data_batch_1'
+gz_file_dir = '/media/mastodon_toxicity_detection/raw_data'
 
 # Get selected the gz files.
 def list_gz_files(directory):
