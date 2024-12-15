@@ -16,7 +16,7 @@ processed_gz_dir = '/media/mastodon_toxicity_detection/processed_data'
 separated_users_dir = '/media/mastodon_toxicity_detection/separated_users'
 consolidated_dir = '/media/mastodon_toxicity_detection/user_info'
 mean_toxicity_scores_dir = '/media/mastodon_toxicity_detection/mean_toxicity_scores'
-user_details_dir = '/media/mastodon_toxicity_detection/user_details'
+all_user_details_dir = '/media/mastodon_toxicity_detection/user_details_all'
 
 class ResearchAnalyser:
     def __init__(self):
@@ -313,18 +313,18 @@ class ResearchAnalyser:
                         total_posts = user.get('total_posts', 0)
 
                         # Check if mean toxicity score exceeds 0.3
-                        if mean_toxicity_score > 0.3:
-                            if domain not in instance_user_details:
-                                instance_user_details[domain] = []
+                        # if mean_toxicity_score > 0.3:
+                        if domain not in instance_user_details:
+                            instance_user_details[domain] = []
 
-                            # Append user details for the domain
-                            instance_user_details[domain].append({
-                                'acct_identifier': acct_identifier,
-                                'acct_url': acct_url,
-                                'total_toxicity_score': total_toxicity_score,
-                                'total_posts': total_posts,
-                                'mean_toxicity_score': mean_toxicity_score
-                            })
+                        # Append user details for the domain
+                        instance_user_details[domain].append({
+                            'acct_identifier': acct_identifier,
+                            'acct_url': acct_url,
+                            'total_toxicity_score': total_toxicity_score,
+                            'total_posts': total_posts,
+                            'mean_toxicity_score': mean_toxicity_score
+                        })
 
             except Exception as e:
                 logger.error(f"Error processing file {user_file}: {e}")
@@ -332,7 +332,7 @@ class ResearchAnalyser:
 
             # Write data for each domain immediately after processing the file
             for domain, users in instance_user_details.items():
-                output_file = os.path.join(user_details_dir, f"{domain}.json")
+                output_file = os.path.join(all_user_details_dir, f"{domain}.json")
                 try:
                     # Write data to the file specific to the domain
                     with open(output_file, 'w', encoding='utf-8') as outfile:
@@ -374,5 +374,5 @@ class ResearchAnalyser:
 # Create an instance and call the method
 if __name__ == "__main__":
     analyser = ResearchAnalyser()
-    analyser.calculate_users()
+    analyser.count_users_per_each_mstdn_instance()
     
